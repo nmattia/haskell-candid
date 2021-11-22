@@ -8,6 +8,7 @@ module Codec.Candid.TH
  , generateCandidDefs
  ) where
 
+import Data.FileEmbed
 import qualified Data.Map as M
 import qualified Data.Row.Records as R
 import qualified Data.Row.Variants as V
@@ -27,7 +28,7 @@ import qualified Data.ByteString.Lazy as BS
 import qualified Language.Haskell.TH.Syntax as TH (Name)
 import Language.Haskell.TH.Quote
 import Language.Haskell.TH.Lib
-import Language.Haskell.TH.Syntax (Q, lookupTypeName, newName, Dec)
+import Language.Haskell.TH.Syntax (Q, lookupTypeName, newName, Dec, addDependentFile, runIO)
 
 import Codec.Candid.Parse
 import Codec.Candid.Data
@@ -36,6 +37,7 @@ import Codec.Candid.Types
 import Codec.Candid.FieldName
 import Codec.Candid.Class (Candid, AnnTrue, AnnFalse)
 
+
 -- | This quasi-quoter turns a Candid description into a Haskell type. It assumes a type variable @m@ to be in scope.
 candid :: QuasiQuoter
 candid = QuasiQuoter { quoteExp = err, quotePat = err, quoteDec = err, quoteType = quoteCandidService }
@@ -43,7 +45,7 @@ candid = QuasiQuoter { quoteExp = err, quotePat = err, quoteDec = err, quoteType
 
 -- | As 'candid', but takes a filename
 candidFile :: QuasiQuoter
-candidFile = quoteFile candid
+candidFile = quoteRelativeFile candid
 
 -- | This quasi-quoter turns works on individual candid types, e.g.
 --
@@ -182,3 +184,20 @@ typ (RefT v) = conT v
 
 isTuple :: [(FieldName, b)] -> Bool
 isTuple fs = length fs > 1 && and (zipWith (==) (map fst fs) (map hashedField [0..]))
+
+
+-- | 'quoteFile' takes a 'QuasiQuoter' and lifts it into one that read
+-- the data out of a file.  For example, suppose @asmq@ is an
+-- assembly-language quoter, so that you can write [asmq| ld r1, r2 |]
+-- as an expression. Then if you define @asmq_f = quoteFile asmq@, then
+-- the quote [asmq_f|foo.s|] will take input from file @"foo.s"@ instead
+-- of the inline text
+quoteRelativeFile :: QuasiQuoter -> QuasiQuoter
+quoteRelativeFile (QuasiQuoter { quoteExp = qe, quotePat = qp, quoteType = qt, quoteDec = qd })
+  = QuasiQuoter { quoteExp = get qe, quotePat = get qp, quoteType = get qt, quoteDec = get qd }
+  where
+   get :: (String -> Q a) -> String -> Q a
+   get old_quoter file_name = do { file_path <- makeRelativeToProject file_name
+                                 ; file_cts <- runIO (readFile file_path)
+                                 ; addDependentFile file_name
+                                 ; old_quoter file_cts }
